@@ -323,6 +323,11 @@ void USART1_IRQHandler(void)
         uint8_t dat = USART_ReceiveData(USART1);
         fifo_write_element(&uart_hw[UART_1].rx_fifo, dat);
     }
+		
+#if DEBUG_UART_USE_INTERRUPT                        // 如果开启 debug 串口中断
+        debug_interrupr_handler();                  // 调用 debug 串口接收处理函数 数据会被 debug 环形缓冲区读取
+#endif                                              // 如果修改了 DEBUG_UART_INDEX 那这段代码需要放到对应的串口中断去
+
 }
 
 /**

@@ -14,8 +14,8 @@
 * 2026-01-01        Lihua      first version
 ********************************************************************************************************************/
 
-#ifndef __common_headfile_h_
-#define __common_headfile_h_
+#ifndef _common_headfile_h_
+#define _common_headfile_h_
 #include "stm32f10x.h"                  // Device header
 //===================================================C语言 函数库===================================================
 #include "math.h"
@@ -30,6 +30,8 @@
 #include "common_typedef.h"
 #include "common_clock.h"
 #include "common_debug.h"
+#include "common_mqttkit.h"
+#include "common_cjson.h"
 #include "zf_common_fifo.h"
 #include "zf_common_font.h"
 #include "zf_common_function.h"
@@ -70,12 +72,20 @@
 #include "device_nrf24l01.h"
 #include "device_tb6612.h"
 #include "device_w25q64.h"
+#include "device_dht11.h"
+#include "device_esp8266.h"
 //===================================================外接设备驱动层===================================================
 
 //===================================================逐飞助手驱动层===================================================
 #include "seekfree_assistant.h"
 #include "seekfree_assistant_interface.h"
 //===================================================逐飞助手驱动层===================================================
+
+//===================================================ONENET驱动层===================================================
+#include "onenet.h"
+//===================================================ONENET驱动层===================================================
+
+
 
 #endif
 

@@ -340,7 +340,7 @@
               <MiscControls></MiscControls>
               <Define>USE_STDPERIPH_DRIVER</Define>
               <Undefine></Undefine>
-              <IncludePath>.\start;.\libraries;.\common;.\device;.\driver;.\user;.\zf_components</IncludePath>
+              <IncludePath>.\start;.\libraries;.\common;.\device;.\driver;.\user;.\tools</IncludePath>
             </VariousControls>
           </Cads>
           <Aads>
@@ -714,6 +714,26 @@
               <FileType>5</FileType>
               <FilePath>.\common\zf_common_fifo.h</FilePath>
             </File>
+            <File>
+              <FileName>common_cjson.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\common\common_cjson.c</FilePath>
+            </File>
+            <File>
+              <FileName>common_cjson.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\common\common_cjson.h</FilePath>
+            </File>
+            <File>
+              <FileName>common_mqttkit.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\common\common_mqttkit.c</FilePath>
+            </File>
+            <File>
+              <FileName>common_mqttkit.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\common\common_mqttkit.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -1034,6 +1054,26 @@
               <FileType>5</FileType>
               <FilePath>.\device\device_w25q64.h</FilePath>
             </File>
+            <File>
+              <FileName>device_dht11.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\device\device_dht11.c</FilePath>
+            </File>
+            <File>
+              <FileName>device_dht11.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\device\device_dht11.h</FilePath>
+            </File>
+            <File>
+              <FileName>device_esp8266.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\device\device_esp8266.c</FilePath>
+            </File>
+            <File>
+              <FileName>device_esp8266.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\device\device_esp8266.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>
@@ -1072,27 +1112,37 @@
           </Files>
         </Group>
         <Group>
-          <GroupName>zf_components</GroupName>
+          <GroupName>tools</GroupName>
           <Files>
             <File>
               <FileName>seekfree_assistant.c</FileName>
               <FileType>1</FileType>
-              <FilePath>.\zf_components\seekfree_assistant.c</FilePath>
+              <FilePath>.\tools\seekfree_assistant.c</FilePath>
             </File>
             <File>
               <FileName>seekfree_assistant.h</FileName>
               <FileType>5</FileType>
-              <FilePath>.\zf_components\seekfree_assistant.h</FilePath>
+              <FilePath>.\tools\seekfree_assistant.h</FilePath>
             </File>
             <File>
               <FileName>seekfree_assistant_interface.c</FileName>
               <FileType>1</FileType>
-              <FilePath>.\zf_components\seekfree_assistant_interface.c</FilePath>
+              <FilePath>.\tools\seekfree_assistant_interface.c</FilePath>
             </File>
             <File>
               <FileName>seekfree_assistant_interface.h</FileName>
               <FileType>5</FileType>
-              <FilePath>.\zf_components\seekfree_assistant_interface.h</FilePath>
+              <FilePath>.\tools\seekfree_assistant_interface.h</FilePath>
+            </File>
+            <File>
+              <FileName>onenet.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\tools\onenet.c</FilePath>
+            </File>
+            <File>
+              <FileName>onenet.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\tools\onenet.h</FilePath>
             </File>
           </Files>
         </Group>

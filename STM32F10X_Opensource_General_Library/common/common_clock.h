@@ -17,7 +17,9 @@
 #define _common_clock_h_
 
 #include "common_headfile.h"
-void clock_gpio_init(gpio_port_enum port);     // 核心时钟初始化
+void clock_gpio_init(gpio_port_enum port);     // 核心gpio时钟初始化
+void clock_gpio_init_all(void);   					   // 所有gpio时钟初始化
 
+	
 #endif
 

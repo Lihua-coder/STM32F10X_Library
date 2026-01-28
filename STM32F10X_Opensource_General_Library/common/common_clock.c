@@ -30,7 +30,18 @@ void clock_gpio_init(gpio_port_enum port){     // 核心时钟初始化
     }
 }
 
-
+//----------------------------------------------------------------------------
+// 函数简介          所有gpio时钟初始化
+// 参数说明          void       
+// 返回类型          void
+// 使用示例          clock_gpio_init();//开启GPIO的时钟
+// 备注信息          I/O
+//----------------------------------------------------------------------------
+void clock_gpio_init_all(void){     // 核心时钟初始化
+        RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA, ENABLE);//开启 GPIOA 的时钟
+        RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOB, ENABLE);//开启 GPIOB 的时钟
+        RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOC, ENABLE);//开启 GPIOC 的时钟
+}
 
 
 

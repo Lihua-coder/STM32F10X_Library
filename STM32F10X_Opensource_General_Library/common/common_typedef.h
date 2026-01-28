@@ -20,6 +20,7 @@
 #include "common_headfile.h"
 
 //数据类型声明
+typedef _Bool			uint1;
 typedef unsigned char   uint8  ;	//  8 bits
 typedef unsigned int  	uint16 ;	// 16 bits
 typedef unsigned long  	uint32 ;	// 32 bits
