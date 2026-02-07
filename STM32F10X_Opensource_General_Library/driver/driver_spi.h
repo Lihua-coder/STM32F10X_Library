@@ -14,10 +14,18 @@
 * 2026-01-01        Lihua      first version
 ********************************************************************************************************************/
 
-#ifndef _zf_driver_spi_h_
-#define _zf_driver_spi_h_
+#ifndef _driver_spi_h_
+#define _driver_spi_h_
 
 #include "common_headfile.h"
+
+// 1表示使用DMA驱动，0表示使用普通驱动
+// 当更改定义后，需要先编译并下载程序，单片机与模块需要断电重启才能正常通讯
+#define SPI_TX_USE_DMA         (1)                                       // 默认使用 DMA 方式驱动	
+#define SPI_RX_USE_DMA         (0)                                       // 默认使用 DMA 方式驱动	
+
+
+
 
 //====================================================SPI 基础函数====================================================
 void        spi_write_8bit                  (spi_index_enum spi_n, const uint8 data);

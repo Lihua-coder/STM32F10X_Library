@@ -17,18 +17,17 @@
 //-------------------------------------------------------------------------------------------------------------------
 // 函数简介     内部调用
 // 参数说明     TIMx                选择定时器
-// 参数说明     PreemptPriority     设置抢占优先级（范围0~3）
-// 参数说明     Subpriority         设置响应优先级（范围0~3）
+// 参数说明     priority     				设置优先级（范围0~15）
 // 返回参数     void
-// 使用示例     pit_irq_init(TIM2_PIT, 1, 1);
+// 使用示例     pit_irq_init(TIM2_PIT, 1);
 // 备注信息
 //-------------------------------------------------------------------------------------------------------------------
-static void pit_irq_init(TIM_TypeDef *TIMx, uint8 PreemptPriority, uint8 Subpriority)
+static void pit_irq_init(TIM_TypeDef *TIMx, uint8 priority)
 {
     NVIC_InitTypeDef nvic;
-    NVIC_PriorityGroupConfig(NVIC_PriorityGroup_2);          /* 2 位抢占、2 位响应 */
-    nvic.NVIC_IRQChannelPreemptionPriority = PreemptPriority & 0x03;
-    nvic.NVIC_IRQChannelSubPriority        = Subpriority   & 0x03;
+    NVIC_PriorityGroupConfig(NVIC_PriorityGroup_4);          /* 4 位抢占、0 位响应 */
+    nvic.NVIC_IRQChannelPreemptionPriority = priority;
+    nvic.NVIC_IRQChannelSubPriority        = 0;
     nvic.NVIC_IRQChannelCmd = ENABLE;
 
     /* 根据定时器选择中断向量 */
@@ -43,13 +42,12 @@ static void pit_irq_init(TIM_TypeDef *TIMx, uint8 PreemptPriority, uint8 Subprio
 // 函数简介     TIM PIT 中断初始化   us 周期
 // 参数说明     pit_n                使用的 PIT 编号
 // 参数说明     period               PIT 周期 us 级别
-// 参数说明     PreemptPriority      设置抢占优先级（范围0~3）
-// 参数说明     Subpriority          设置响应优先级（范围0~3）
+// 参数说明     priority     				 设置优先级（范围0~15）
 // 返回参数     void
-// 使用示例     pit_us_init(TIM2_PIT, 100, 1, 1);// 设置周期中断100us
+// 使用示例     pit_us_init(TIM2_PIT, 100, 0);// 设置周期中断100us
 // 备注信息			范围0us~65.535ms
 //-------------------------------------------------------------------------------------------------------------------
-void pit_us_init(pit_index_enum pit_n, uint16 period, uint8 PreemptPriority, uint8 Subpriority)
+void pit_us_init(pit_index_enum pit_n, uint16 period, uint8 priority)
 {
     TIM_TypeDef *timx = NULL;
     TIM_TimeBaseInitTypeDef TIM_TimeBaseInitStructure;				//定义结构体变量
@@ -73,7 +71,7 @@ void pit_us_init(pit_index_enum pit_n, uint16 period, uint8 PreemptPriority, uin
     /* 3. 中断配置 */
     TIM_ClearFlag(timx, TIM_FLAG_Update);   /* 清更新标志 */
     TIM_ITConfig(timx, TIM_IT_Update, ENABLE);
-    pit_irq_init(timx, PreemptPriority, Subpriority);
+    pit_irq_init(timx, priority);
 
     /* 4. 启动定时器 */
     TIM_Cmd(timx, ENABLE);
@@ -82,13 +80,12 @@ void pit_us_init(pit_index_enum pit_n, uint16 period, uint8 PreemptPriority, uin
 // 函数简介     TIM PIT 中断初始化 us 周期
 // 参数说明     pit_n                使用的 PIT 编号
 // 参数说明     period               PIT 周期 ms 级别
-// 参数说明     PreemptPriority      设置抢占优先级（范围0~3）
-// 参数说明     Subpriority          设置响应优先级（范围0~3）
+// 参数说明     priority     				 设置抢占优先级（范围0~15）
 // 返回参数     void
-// 使用示例     pit_ms_init(TIM2_PIT, 100, 1, 1);
+// 使用示例     pit_ms_init(TIM2_PIT, 100, 1);
 // 备注信息			范围0ms~65.535s
 //-------------------------------------------------------------------------------------------------------------------
-void pit_ms_init(pit_index_enum pit_n, uint16 period, uint8 PreemptPriority, uint8 Subpriority)
+void pit_ms_init(pit_index_enum pit_n, uint16 period, uint8 priority)
 {
     TIM_TypeDef *timx = NULL;
     TIM_TimeBaseInitTypeDef TIM_TimeBaseInitStructure;				//定义结构体变量
@@ -111,7 +108,7 @@ void pit_ms_init(pit_index_enum pit_n, uint16 period, uint8 PreemptPriority, uin
     /* 3. 中断配置 */
     TIM_ClearFlag(timx, TIM_FLAG_Update);
     TIM_ITConfig(timx, TIM_IT_Update, ENABLE);
-    pit_irq_init(timx, PreemptPriority, Subpriority);
+    pit_irq_init(timx, priority);
 
     /* 4. 启动定时器 */
     TIM_Cmd(timx, ENABLE);

@@ -19,6 +19,12 @@
 
 #include "driver_gpio.h"
 
+// 1表示使用DMA驱动，0表示使用普通驱动（暂不支持）
+// 当更改定义后，需要先编译并下载程序，单片机与模块需要断电重启才能正常通讯
+#define IIC_TX_USE_DMA         (1)                                       // 默认使用 DMA 方式驱动	
+#define IIC_RX_USE_DMA         (0)                                       // 默认使用 DMA 方式驱动	
+
+
 void iic_write_8bit(iic_index_enum iic_n, const uint8 dat);
 void iic_write_8bit_array(iic_index_enum iic_n, const uint8 *dat, uint32 len);
 void iic_write_16bit(iic_index_enum iic_n, const uint16 dat);

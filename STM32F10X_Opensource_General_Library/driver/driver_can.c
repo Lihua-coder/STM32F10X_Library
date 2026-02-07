@@ -80,7 +80,7 @@ static void can_gpio_config(can_tx_pin_enum tx, can_rx_pin_enum rx)
 static void can_nvic_config(void)
 {
     NVIC_InitTypeDef nvic = {0};
-    NVIC_PriorityGroupConfig(NVIC_PriorityGroup_2);
+    NVIC_PriorityGroupConfig(NVIC_PriorityGroup_4);
     nvic.NVIC_IRQChannel                   = USB_LP_CAN1_RX0_IRQn;
     nvic.NVIC_IRQChannelPreemptionPriority = 1;
     nvic.NVIC_IRQChannelSubPriority        = 0;

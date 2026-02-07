@@ -18,13 +18,12 @@
 //  函数简介      EXTI 中断初始化
 //  参数说明      exti_pin         选择 eru 通道
 //  参数说明      trigger          触发方式
-//  参数说明      PreemptPriority  抢占优先级 0~3
-//  参数说明      Subpriority      响应优先级 0~3
+//  参数说明      priority  			 设置优先级 0~15
 //  返回参数      void
-//  使用示例      exti_init(ERU_CH0_REQ0_PB0, EXTI_Trigger_Falling, 1, 1);
+//  使用示例      exti_init(ERU_CH0_REQ0_PB0, EXTI_Trigger_Falling, 0);
 //  备注信息      仅支持 PB0/PB1/PB5~PB15 对应通道
 //-------------------------------------------------------------------------------------------------------------------
-void exti_init(exti_pin_enum exti_pin, EXTITrigger_TypeDef trigger, uint8 PreemptPriority, uint8 Subpriority)
+void exti_init(exti_pin_enum exti_pin, EXTITrigger_TypeDef trigger, uint8 priority)
 {
     GPIO_InitTypeDef  gpio_init_struct;
     EXTI_InitTypeDef  exti_init_struct;
@@ -75,10 +74,10 @@ void exti_init(exti_pin_enum exti_pin, EXTITrigger_TypeDef trigger, uint8 Preemp
     EXTI_Init(&exti_init_struct);
 
     /* 6. NVIC 配置 */
-    NVIC_PriorityGroupConfig(NVIC_PriorityGroup_2);
+    NVIC_PriorityGroupConfig(NVIC_PriorityGroup_4);
     nvic_init_struct.NVIC_IRQChannel                   = irqn;
-    nvic_init_struct.NVIC_IRQChannelPreemptionPriority = PreemptPriority;
-    nvic_init_struct.NVIC_IRQChannelSubPriority        = Subpriority;
+    nvic_init_struct.NVIC_IRQChannelPreemptionPriority = priority;
+    nvic_init_struct.NVIC_IRQChannelSubPriority        = 0;
     nvic_init_struct.NVIC_IRQChannelCmd                = ENABLE;
     NVIC_Init(&nvic_init_struct);
 }

@@ -18,8 +18,8 @@
 #include "common_headfile.h"
 
 
-void pit_us_init(pit_index_enum pit_n, uint16 period, uint8 PreemptPriority, uint8 Subpriority);
-void pit_ms_init(pit_index_enum pit_n, uint16 period, uint8 PreemptPriority, uint8 Subpriority);
+void pit_us_init(pit_index_enum pit_n, uint16 period, uint8 priority);
+void pit_ms_init(pit_index_enum pit_n, uint16 period, uint8 priority);
 void pit_start(pit_index_enum pit_n);
 void pit_close(pit_index_enum pit_n);
 void pit_all_close(void);

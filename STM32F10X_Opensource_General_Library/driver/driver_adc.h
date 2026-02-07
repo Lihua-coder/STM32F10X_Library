@@ -13,18 +13,42 @@
 * 日期              作者           备注
 * 2026-01-01        Lihua      first version
 ********************************************************************************************************************/
-#ifndef __DRIVER_ADC_H
-#define __DRIVER_ADC_H
+#ifndef _driver_adc_h_
+#define _driver_adc_h_
 
 #include "common_headfile.h"
 
+//==================================================定义 ADC 基本配置================================================
+// 定义adc引脚 用户可以新增可以修改 默认定义四个adc
+// 定义adc顺序对应下方 adc_index_enum 枚举体中定义的顺序
+// 如果用户可以新增adc 那么需要同步在下方 adc_index_enum 枚举体中新增adc
+#define ADC_LIST                    {ADC1_CH0_PA0, ADC1_CH1_PA1, ADC1_CH2_PA2, ADC1_CH3_PA3}
 
-void adc1_init(adc1_channel_enum vadc_chn, adc_resolution_enum resolution);
-uint16 adc1_convert(adc1_channel_enum vadc_chn);
-uint16 adc1_mean_filter_convert(adc1_channel_enum vadc_chn, uint8 count);
+// ADC_USE_DMA定义为1表示使用DMA驱动，0表示使用普通驱动
+// 当更改ADC_USE_DMA定义后，需要先编译并下载程序，单片机与模块需要断电重启才能正常通讯
+#define ADC_USE_DMA         (1)                                       // 默认使用 DMA 方式驱动	
+
+typedef enum
+{
+    ADC_1,
+    ADC_2,
+    ADC_3,
+    ADC_4,
+    ADC_NUMBER,
+}adc_index_enum;            // adc索引 对应上方定义的adc引脚个数 默认定义四个adc
+//==================================================定义 ADC 基本配置================================================
 
 
-void adc1_dma1_init(const adc1_channel_enum  vadc_chn[], adc_resolution_enum resolution,const uint8 rank[], uint8 count, uint32 destination_addr);
+
+
+//====================================================ADC 基础函数====================================================
+uint16  adc_convert             (adc_index_enum adc_n);                                    // ADC转换一次
+uint16  adc_mean_filter_convert (adc_index_enum adc_n, uint8 count);                       // ADC均值滤波
+void adc_init (adc_resolution_enum resolution);
+//====================================================ADC 基础函数====================================================
+
+
+
 
 #endif
 

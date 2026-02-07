@@ -17,10 +17,13 @@
 #define _driver_dma_h_
 #include "common_headfile.h"
 
-void dma1_init(dma_channel_enum dma1_ch, uint32 source_addr, uint32 destination_addr, uint32 datasize, uint16 dma_count, uint32 priority);
+void dma1_init(dma_channel_enum dma1_ch, uint32 source_addr, uint32 destination_addr, 
+	uint32 datasize, uint16 dma_count, uint32 priority, uint32 dir);
 void dma1_disable(dma_channel_enum dma1_ch);
 void dma1_enable(dma_channel_enum dma1_ch);
 void dma1_transfer(dma_channel_enum dma1_ch, uint16_t dma_count);
 
+void dma_start(DMA_Channel_TypeDef* ch, uint16 len);
+void dma_wait_done(DMA_Channel_TypeDef* ch);
 
 #endif

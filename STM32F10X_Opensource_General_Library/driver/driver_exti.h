@@ -19,7 +19,7 @@
 #include "common_headfile.h"
 
 
-void exti_init (exti_pin_enum exti_pin, EXTITrigger_TypeDef trigger, uint8 PreemptPriority, uint8 Subpriority);
+void exti_init(exti_pin_enum exti_pin, EXTITrigger_TypeDef trigger, uint8 priority);
 void exti_enable(exti_pin_enum eru_pin);
 void exti_disable(exti_pin_enum eru_pin);
 void exti_all_close(void);

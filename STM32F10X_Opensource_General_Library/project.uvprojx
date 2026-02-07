@@ -1074,6 +1074,16 @@
               <FileType>5</FileType>
               <FilePath>.\device\device_esp8266.h</FilePath>
             </File>
+            <File>
+              <FileName>device_key.c</FileName>
+              <FileType>1</FileType>
+              <FilePath>.\device\device_key.c</FilePath>
+            </File>
+            <File>
+              <FileName>device_key.h</FileName>
+              <FileType>5</FileType>
+              <FilePath>.\device\device_key.h</FilePath>
+            </File>
           </Files>
         </Group>
         <Group>

@@ -15,291 +15,148 @@
 ********************************************************************************************************************/
 #include "driver_adc.h"
 
-/*=============================  模块级静态变量  ==================================*/
-static uint8 adc1_base_init_done = 0;        /* ADC1 基础部分只初始化一次 */
-static uint8 adc1_init_flag[10]   = {0};       /* CH0~CH9 通道初始化标记，供 adc_init/adc_convert 共享 */
-/*================================================================================*/
-// 内部使用，用户无需关心
-static uint8 get_adc1_idx(adc1_channel_enum ch)
+static const adc1_channel_enum adc_index[ADC_NUMBER] = ADC_LIST;// ADC列表
+
+#if ADC_USE_DMA
+static volatile uint16 adc_dma_buf[ADC_NUMBER];   // DMA 循环缓冲区
+#endif
+
+static adc_resolution_enum adc_resolution = ADC_12BIT;//分辨率缓存
+
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     ADC 转换一次
+// 参数说明     adc_n           选择 ADC 通道 (详见 driver_adc.h 中枚举 adc_index_enum 定义)
+// 返回参数     uint16          转换的 ADC 值
+// 使用示例     adc_convert(ADC_1);
+// 备注信息
+//-------------------------------------------------------------------------------------------------------------------
+uint16 adc_convert(adc_index_enum adc_n)
 {
-    switch(ch)
+    if(adc_n >= ADC_NUMBER) return 0;
+
+#if ADC_USE_DMA
+    /* DMA 模式：直接读循环缓冲区 */
+    uint16 raw = adc_dma_buf[adc_n];
+#else
+    /* 普通模式：软件触发 → 等待 EOC → 读 DR */
+    uint8  channel;
+    switch(adc_index[adc_n])
     {
-        case ADC1_CH0_PA0: return 0;
-        case ADC1_CH1_PA1: return 1;
-        case ADC1_CH2_PA2: return 2;
-        case ADC1_CH3_PA3: return 3;
-        case ADC1_CH4_PA4: return 4;
-        case ADC1_CH5_PA5: return 5;
-        case ADC1_CH6_PA6: return 6;
-        case ADC1_CH7_PA7: return 7;
-        case ADC1_CH8_PB0: return 8;
-        case ADC1_CH9_PB1: return 9;
-        default:           return 0xFF;   /* 非法通道 */
+        case ADC1_CH0_PA0: channel = ADC_Channel_0; break;
+        case ADC1_CH1_PA1: channel = ADC_Channel_1; break;
+        case ADC1_CH2_PA2: channel = ADC_Channel_2; break;
+        case ADC1_CH3_PA3: channel = ADC_Channel_3; break;
+        default: channel = ADC_Channel_0;
     }
+    ADC_RegularChannelConfig(ADC1, channel, 1, ADC_SampleTime_55Cycles5);
+    ADC_SoftwareStartConvCmd(ADC1, ENABLE);
+    while(ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC) == RESET);
+    uint16 raw = ADC_GetConversionValue(ADC1);
+#endif
+
+    return (adc_resolution == ADC_8BIT) ? (raw >> 4) : raw;
 }
-//--------------------------------------------------------------------------------------------------------------------
-// 函数名     adc1_init     
-// 功能说明   初始化指定 ADC1 通道，并设定分辨率
-// 参数说明   vadc_chn      选择 ADC1 通道（如 ADC1_CH0_PA0）
-// 参数说明   resolution    选择分辨率（ADC_8BIT 或 ADC_12BIT）
-// 返回参数   void
-// 使用示例   adc_init(ADC1_CH0_PA0, ADC_12BIT);
-// 备注信息   1. 通道级标记，保证同一通道只初始化一次
-//            2. 分辨率/对齐方式每次调用都可刷新
-//--------------------------------------------------------------------------------------------------------------------
-void adc1_init(adc1_channel_enum vadc_chn, adc_resolution_enum resolution)
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     ADC 均值滤波转换
+// 参数说明     adc_n           选择 ADC  (详见 driver_adc.h 中枚举 adc_index_enum 定义)
+// 参数说明     count           均值滤波次数
+// 返回参数     uint16          转换的 ADC 值
+// 使用示例     adc_mean_filter_convert(ADC_1, 5);                        // 采集5次 然后返回平均值
+// 备注信息
+//-------------------------------------------------------------------------------------------------------------------
+uint16 adc_mean_filter_convert(adc_index_enum adc_n, uint8 count)
 {
-    uint8 idx = get_adc1_idx(vadc_chn);
-    if(idx == 0xFF)  return;                 /* 非法通道，直接返回 */
-    /*------------------ 1. 打开对应 GPIO 时钟并配置为模拟输入 ------------------*/
-    GPIO_InitTypeDef  GPIO_InitStructure;
-    GPIO_TypeDef*   gpio_port       = 0;
-    uint16          gpio_pin        = 0;
+    if(adc_n >= ADC_NUMBER || count == 0) return 0;
+    uint32 sum = 0;
+    for(uint8 i = 0; i < count; i++)
+        sum += adc_convert(adc_n);
+    uint16 ret = (uint16)(sum / count);
+    return ret;
+}
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介     ADC 初始化
+// 参数说明     resolution      选择选择通道分辨率(如果同一个 ADC 模块初始化时设置了不同的分辨率 则最后一个初始化的分辨率生效)
+// 返回参数     void
+// 使用示例     adc_init(ADC_8BIT);                                // 初始化ADC 分辨率为8位
+// 备注信息
+//-------------------------------------------------------------------------------------------------------------------
+void adc_init(adc_resolution_enum resolution)
+{
+	if (ADC_NUMBER == 0) return;
+RCC_ADCCLKConfig(RCC_PCLK2_Div6);   // 把 ADCCLK 降到 12 MHz
+    adc_resolution = resolution;
 
-    switch(vadc_chn)
+    /* 1. GPIO 模拟输入 */
+    for(uint8 i = 0; i < ADC_NUMBER; i++)
     {
-        case ADC1_CH0_PA0: gpio_port = GPIOA; gpio_pin = GPIO_Pin_0; break;
-        case ADC1_CH1_PA1: gpio_port = GPIOA; gpio_pin = GPIO_Pin_1; break;
-        case ADC1_CH2_PA2: gpio_port = GPIOA; gpio_pin = GPIO_Pin_2; break;
-        case ADC1_CH3_PA3: gpio_port = GPIOA; gpio_pin = GPIO_Pin_3; break;
-        case ADC1_CH4_PA4: gpio_port = GPIOA; gpio_pin = GPIO_Pin_4; break;
-        case ADC1_CH5_PA5: gpio_port = GPIOA; gpio_pin = GPIO_Pin_5; break;
-        case ADC1_CH6_PA6: gpio_port = GPIOA; gpio_pin = GPIO_Pin_6; break;
-        case ADC1_CH7_PA7: gpio_port = GPIOA; gpio_pin = GPIO_Pin_7; break;
-        case ADC1_CH8_PB0: gpio_port = GPIOB; gpio_pin = GPIO_Pin_0; break;
-        case ADC1_CH9_PB1: gpio_port = GPIOB; gpio_pin = GPIO_Pin_1; break;
-        default: return;
-    }
-    GPIO_InitStructure.GPIO_Pin  = gpio_pin;
-    GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AIN;
-    GPIO_Init(gpio_port, &GPIO_InitStructure);
-
-    /*------------------ 2. ADC1 基础部分（仅第一次） ------------------*/
-    if(!adc1_base_init_done)
-    {
-        RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1, ENABLE);
-
-        ADC_InitTypeDef ADC_InitStructure;
-        ADC_InitStructure.ADC_Mode               = ADC_Mode_Independent;
-        ADC_InitStructure.ADC_ScanConvMode       = DISABLE;
-        ADC_InitStructure.ADC_ContinuousConvMode = DISABLE;
-        ADC_InitStructure.ADC_ExternalTrigConv   = ADC_ExternalTrigConv_None;
-        ADC_InitStructure.ADC_DataAlign          = ADC_DataAlign_Right;
-        ADC_InitStructure.ADC_NbrOfChannel       = 1;
-        ADC_Init(ADC1, &ADC_InitStructure);
-
-        RCC_ADCCLKConfig(RCC_PCLK2_Div6);   /* 12MHz */
-
-        /* 自校准 */
-        ADC_ResetCalibration(ADC1);
-        while(ADC_GetResetCalibrationStatus(ADC1));
-        ADC_StartCalibration(ADC1);
-        while(ADC_GetCalibrationStatus(ADC1));
-
-        adc1_base_init_done = 1;
+        gpio_pin_enum pin;
+        switch(adc_index[i])
+        {
+            case ADC1_CH0_PA0: pin = PA0; break;
+            case ADC1_CH1_PA1: pin = PA1; break;
+            case ADC1_CH2_PA2: pin = PA2; break;
+            case ADC1_CH3_PA3: pin = PA3; break;
+            default: continue;
+        }
+        gpio_init(pin, GPI_AIN, 0);
     }
 
-    /*------------------ 3. 分辨率/对齐方式（每次调用都可刷新） ------------------*/
-    ADC_InitTypeDef ADC_InitStructure;
-    ADC_InitStructure.ADC_Mode               = ADC_Mode_Independent;
-    ADC_InitStructure.ADC_ScanConvMode       = DISABLE;
-    ADC_InitStructure.ADC_ContinuousConvMode = DISABLE;
-    ADC_InitStructure.ADC_ExternalTrigConv   = ADC_ExternalTrigConv_None;
-    ADC_InitStructure.ADC_NbrOfChannel       = 1;
+    /* 2. ADC 外设时钟 & 寄存器初始化 */
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1, ENABLE);
 
-    if(resolution == ADC_8BIT)
-        ADC_InitStructure.ADC_DataAlign = ADC_DataAlign_Left;   /* 8 位取高 */
-    else
-        ADC_InitStructure.ADC_DataAlign = ADC_DataAlign_Right;  /* 12 位右对齐 */
+    ADC_InitTypeDef adc;
+    ADC_StructInit(&adc);
+    adc.ADC_Mode               = ADC_Mode_Independent;
+#if ADC_USE_DMA
+    adc.ADC_ScanConvMode       = ENABLE;               /* 多通道扫描 */
+    adc.ADC_ContinuousConvMode = ENABLE;               /* 连续转换 */
+#else
+    adc.ADC_ScanConvMode       = DISABLE;              /* 单通道，每次只转一路 */
+    adc.ADC_ContinuousConvMode = DISABLE;              /* 单次转换，手动触发 */
+#endif
+    adc.ADC_ExternalTrigConv   = ADC_ExternalTrigConv_None;
+    adc.ADC_DataAlign          = ADC_DataAlign_Right;
+    adc.ADC_NbrOfChannel       = ADC_NUMBER;
+    ADC_Init(ADC1, &adc);
 
-    ADC_Init(ADC1, &ADC_InitStructure);
+#if ADC_USE_DMA
+    /* DMA 模式下，把 4 路通道按顺序排好 */
+    for(uint8 i = 0; i < ADC_NUMBER; i++)
+    {
+        uint8 ch;
+        switch(adc_index[i])
+        {
+            case ADC1_CH0_PA0: ch = ADC_Channel_0; break;
+            case ADC1_CH1_PA1: ch = ADC_Channel_1; break;
+            case ADC1_CH2_PA2: ch = ADC_Channel_2; break;
+            case ADC1_CH3_PA3: ch = ADC_Channel_3; break;
+            default: ch = ADC_Channel_0;
+        }
+        ADC_RegularChannelConfig(ADC1, ch, i + 1, ADC_SampleTime_55Cycles5);/* 采样时间（默认 55.5 周期）*/
+    }
+    ADC_DMACmd(ADC1, ENABLE);    /* 使能 ADC1 的 DMA 请求 */
+		
+    /* 3. DMA 初始化 */
+    dma1_init(dma1_CH1,(uint32)&ADC1->DR,(uint32)adc_dma_buf,DMA_HalfWord,ADC_NUMBER,DMA_Priority_High, DMA_DIR_PeripheralSRC);
+    DMA1_Channel1->CCR |= (1 << 5);   /* CIRC = 1，循环模式 */
+    dma1_enable(dma1_CH1);
+#endif
 
-    /*------------------ 4. 打开 ADC ------------------*/
+    /* 4. 启动 ADC */
     ADC_Cmd(ADC1, ENABLE);
 
-    /*------------------ 5. 打标记，防止重复初始化 ------------------*/
-    adc1_init_flag[idx] = 1;
-}
-//--------------------------------------------------------------------------------------------------------------------
-// 函数名     adc1_convert  
-// 功能说明   执行一次 ADC 转换（软件触发，单次模式）
-// 参数说明   vadc_chn      要采样的 ADC1 通道（如 ADC1_CH0_PA0）
-// 返回参数   uint16        转换结果
-//                         - 若初始化时分辨率=ADC_12BIT，则返回 0~4095
-//                         - 若分辨率=ADC_8BIT，则返回高 8 位（0~255）
-// 使用示例   uint16 val = adc_convert(ADC1_CH0_PA0);
-// 备注信息   如果该通道尚未初始化，则自动调用 adc_init(ch, ADC_12BIT)
-//--------------------------------------------------------------------------------------------------------------------
-uint16 adc1_convert(adc1_channel_enum vadc_chn)
-{
-    /* 如果还没初始化过，默认给 12-bit 初始化一次 */
-    uint8 idx = get_adc1_idx(vadc_chn);
-    if(idx == 0xFF)  return 0;                 /* 非法通道，直接返回 */
+    /* 5. 校准 */
+    ADC_ResetCalibration(ADC1);
+    while(ADC_GetResetCalibrationStatus(ADC1));
+    ADC_StartCalibration(ADC1);
+    while(ADC_GetCalibrationStatus(ADC1));
 
-    if(idx != 0xFF && !adc1_init_flag[idx])
-    {
-        adc1_init(vadc_chn, ADC_12BIT);   /* 默认 12-bit */
-        adc1_init_flag[idx] = 1;
-    }
-    /* 采样时间（默认 55.5 周期）*/      
-    ADC_RegularChannelConfig(ADC1, idx, 1, ADC_SampleTime_55Cycles5);
-    /* 软件触发转换 */
+#if ADC_USE_DMA
+    /* 6. DMA 模式：启动一次即可，连续转换 + 循环 DMA 会自动刷新 */
     ADC_SoftwareStartConvCmd(ADC1, ENABLE);
-
-    /* 等待转换结束，简单超时保护 */
-    uint32_t timeout = 0xFFFF;
-    while(!ADC_GetFlagStatus(ADC1, ADC_FLAG_EOC))
-    {
-        if(--timeout == 0) return 0;     /* 超时容错 */
-    }
-
-    /* 读取转换结果 */
-    uint16_t result = ADC_GetConversionValue(ADC1);
-
-    /* 如果之前设的是 8-bit（左对齐），则返回高 8 位 */
-    if((ADC1->CR2 & ADC_CR2_ALIGN) == 0)   /* 0=右对齐(12bit)，非0=左对齐(8bit) */
-        return result;                     /* 12-bit 右对齐，直接返回 */
-    else
-        return (result >> 8) & 0xFF;       /* 8-bit 模式，取高 8 位 */
+#else
+    /* 普通模式：不自动启动，每次 adc_convert() 里单独触发 */
+#endif
 }
-//--------------------------------------------------------------------------------------------------------------------
-// 函数名     adc1_mean_filter_convert		
-// 功能说明   均值滤波 ADC 采样（去掉最大/最小后平均）
-// 参数说明   vadc_chn  要采样的 ADC1 通道（如 ADC1_CH0_PA0）
-// 参数说明   count     采样次数（建议 4~30，用户自行权衡速度与平稳度）
-// 返回参数   uint16    滤波后的结果
-// 使用示例   uint16 val = adc1_mean_filter_convert(ADC1_CH0_PA0, 16);
-// 备注信息   若 count<3 则直接求平均；内部自动调用 adc_convert()
-//--------------------------------------------------------------------------------------------------------------------
-uint16 adc1_mean_filter_convert(adc1_channel_enum vadc_chn, uint8 count)
-{
-    if(count == 0) return 0;
-
-    uint32 sum = 0;
-    uint16 min_val = 0xFFFF;
-    uint16 max_val = 0;
-    for(uint8 i = 0; i < count; i++)
-    {
-        uint16 val = adc1_convert(vadc_chn);   /* 单次转换 */
-        sum += val;
-        if(val < min_val) min_val = val;
-        if(val > max_val) max_val = val;
-    }
-
-    if(count >= 3)
-        sum -= (min_val + max_val);           /* 去掉最大、最小 */
-
-    return (uint16)(sum / (count >= 3 ? (count - 2) : count));
-}
-//--------------------------------------------------------------------------------------------------------------------
-// 函数名     adc1_dma_init     
-// 功能说明   一次性初始化 1~16 路 ADC1 通道，并配置 DMA1-CH1 循环搬运
-// 参数说明   vadc_chn[]      		通道号数组，长度 = count
-// 参数说明   resolution    			选择分辨率（ADC_8BIT 或 ADC_12BIT）
-// 参数说明   rank[]   						选择adc1排名(1~16)，长度 = count
-// 参数说明   count    						设置adc1数量	from 1 to 16
-// 参数说明   destination_addr    设置目的地址
-// 返回参数   void
-// 使用示例   adc1_dma1_init(ch_list, ADC_12BIT, rank, 3, (uint32_t)adc_destination);
-// 备注信息   adc1_channel_enum  ch_list[3] = { ADC1_CH0_PA0, ADC1_CH1_PA1, ADC1_CH2_PA2 };
-//						uint8  rank[3] = { 1,2,3 };
-//						uint16 adc_destination[3];
-//--------------------------------------------------------------------------------------------------------------------
-void adc1_dma1_init(const adc1_channel_enum  vadc_chn[], adc_resolution_enum resolution,
-	const uint8 rank[], uint8 count, uint32 destination_addr){
-			
-    GPIO_TypeDef *port;
-    uint16 pin;
-    GPIO_InitTypeDef gpio;
-
-    if(!count || count>16) return;
-
-    /* 1. GPIO 时钟 + 模拟输入 */
-    for(uint8 i=0;i<count;i++)
-    {
-        port=0; pin=0;
-        switch(vadc_chn[i])
-        {
-            case ADC1_CH0_PA0: port=GPIOA; pin=GPIO_Pin_0; break;
-            case ADC1_CH1_PA1: port=GPIOA; pin=GPIO_Pin_1; break;
-            case ADC1_CH2_PA2: port=GPIOA; pin=GPIO_Pin_2; break;
-            case ADC1_CH3_PA3: port=GPIOA; pin=GPIO_Pin_3; break;
-            case ADC1_CH4_PA4: port=GPIOA; pin=GPIO_Pin_4; break;
-            case ADC1_CH5_PA5: port=GPIOA; pin=GPIO_Pin_5; break;
-            case ADC1_CH6_PA6: port=GPIOA; pin=GPIO_Pin_6; break;
-            case ADC1_CH7_PA7: port=GPIOA; pin=GPIO_Pin_7; break;
-            case ADC1_CH8_PB0: port=GPIOB; pin=GPIO_Pin_0; break;
-            case ADC1_CH9_PB1: port=GPIOB; pin=GPIO_Pin_1; break;
-            default: return;
-        }
-        RCC_APB2PeriphClockCmd(port==GPIOA ? RCC_APB2Periph_GPIOA : RCC_APB2Periph_GPIOB, ENABLE);
-
-        gpio.GPIO_Pin  = pin;        
-        gpio.GPIO_Mode = GPIO_Mode_AIN;
-        GPIO_Init(port,&gpio);
-    }
-
-    /* 2. ADC1 基础部分（仅一次） */
-    if(!adc1_base_init_done)
-    {
-        RCC_APB2PeriphClockCmd(RCC_APB2Periph_ADC1,ENABLE);
-        RCC_ADCCLKConfig(RCC_PCLK2_Div6);
-        ADC_DeInit(ADC1);
-
-        ADC_InitTypeDef adc;
-        ADC_StructInit(&adc);
-        adc.ADC_Mode               = ADC_Mode_Independent;
-        adc.ADC_ScanConvMode       = ENABLE;
-        adc.ADC_ContinuousConvMode = ENABLE;//连续扫描
-        adc.ADC_ExternalTrigConv   = ADC_ExternalTrigConv_None;
-        adc.ADC_DataAlign          = ADC_DataAlign_Right;
-        adc.ADC_NbrOfChannel       = count;
-        ADC_Init(ADC1,&adc);
-
-        ADC_ResetCalibration(ADC1);
-        while(ADC_GetResetCalibrationStatus(ADC1));
-        ADC_StartCalibration(ADC1);
-        while(ADC_GetCalibrationStatus(ADC1));
-        adc1_base_init_done=1;
-    }
-
-    /* 3. 写入转换序列 */
-    for(uint8 i=0;i<count;i++)
-    {
-        uint8 ch_idx = get_adc1_idx(vadc_chn[i]);
-        if(ch_idx==0xFF) return;
-        ADC_RegularChannelConfig(ADC1,ch_idx,rank[i],ADC_SampleTime_55Cycles5);
-    }
-
-    /* 4. 分辨率 */
-    if(resolution==ADC_8BIT)
-        ADC1->CR2 |=  ADC_CR2_ALIGN;   /* 左对齐 */
-    else
-        ADC1->CR2 &=~ADC_CR2_ALIGN;   /* 右对齐 */
-
-    /* 5. DMA1-CH1 */
-    RCC_AHBPeriphClockCmd(RCC_AHBPeriph_DMA1,ENABLE);
-    DMA_DeInit(DMA1_Channel1);
-
-    DMA_InitTypeDef dma;
-    DMA_StructInit(&dma);
-    dma.DMA_PeripheralBaseAddr = (uint32)&ADC1->DR;
-    dma.DMA_MemoryBaseAddr     = destination_addr;
-    dma.DMA_DIR                = DMA_DIR_PeripheralSRC;
-    dma.DMA_BufferSize         = (uint16)count;
-    dma.DMA_PeripheralInc      = DMA_PeripheralInc_Disable;//不自增
-    dma.DMA_MemoryInc          = DMA_MemoryInc_Enable;
-    dma.DMA_PeripheralDataSize = DMA_PeripheralDataSize_HalfWord;
-    dma.DMA_MemoryDataSize     = DMA_PeripheralDataSize_HalfWord;
-    dma.DMA_Mode               = DMA_Mode_Circular;//循环模式
-    dma.DMA_Priority           = DMA_Priority_High;//优先级高
-    dma.DMA_M2M                = DMA_M2M_Disable;
-    DMA_Init(DMA1_Channel1,&dma);
-
-    /* 6. 启动 */
-    ADC_DMACmd(ADC1,ENABLE);
-    DMA_Cmd(DMA1_Channel1,ENABLE);
-    ADC_Cmd(ADC1,ENABLE);
-    ADC_SoftwareStartConvCmd(ADC1,ENABLE);
-}
-

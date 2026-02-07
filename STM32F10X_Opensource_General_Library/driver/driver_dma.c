@@ -31,11 +31,13 @@ static DMA_Channel_TypeDef* const DMA1_ChannelTable[] = {
 // 参数说明      datasize				     数据宽度  支持 DMA_Byte/DMA_HalfWord/DMA_Word
 // 参数说明      dma_count           设置dma搬移次数
 // 参数说明      priority            设置dma优先级	DMA_Priority_Low/Medium/High/VeryHigh
+// 参数说明      dir           			 设置dma方向	DMA_DIR_PeripheralSRC（外设→内存）/DMA_DIR_PeripheralDST（内存→外设）
 // 返回参数      void
 // 使用示例      dma1_init(dma1_CH1, DataA, DataB, DMA_Byte, 3, DMA_Priority_Medium);
 // 备注信息			 初始化后不会进行转运，转运需使用void dma1_transfer(dma_channel_enum dma1_ch, uint16_t dma_count);
 //-------------------------------------------------------------------------------------------------------------------
-void dma1_init(dma_channel_enum dma1_ch, uint32 source_addr, uint32 destination_addr, uint32 datasize, uint16 dma_count, uint32 priority)
+void dma1_init(dma_channel_enum dma1_ch, uint32 source_addr, uint32 destination_addr, 
+	uint32 datasize, uint16 dma_count, uint32 priority, uint32 dir)
 {
     if (dma1_ch > dma1_CH7) return;                 /* 越界保护 */
 
@@ -46,16 +48,15 @@ void dma1_init(dma_channel_enum dma1_ch, uint32 source_addr, uint32 destination_
 
     /* 2. 关闭通道 + 复位寄存器（官方例程均如此）*/
     DMA_Cmd(ch, DISABLE);
-    /* 标准库没有 EN 位宏，直接读第 0 位等待 */
-    while (ch->CCR & (1U << 0));                    /* 第 0 位即 EN */
-    DMA_DeInit(ch);
+		while(ch->CCR & 1U); /* 等 EN 清零 */
+		DMA_DeInit(ch);
 
     /* 3. 填结构体 */
     DMA_InitTypeDef dmaInit;
     DMA_StructInit(&dmaInit);
     dmaInit.DMA_PeripheralBaseAddr = source_addr;
     dmaInit.DMA_MemoryBaseAddr     = destination_addr;
-    dmaInit.DMA_DIR                = DMA_DIR_PeripheralSRC;
+    dmaInit.DMA_DIR                = dir;
     dmaInit.DMA_BufferSize         = dma_count;
     dmaInit.DMA_PeripheralInc      = DMA_PeripheralInc_Enable;
     dmaInit.DMA_MemoryInc          = DMA_MemoryInc_Enable;
@@ -63,7 +64,7 @@ void dma1_init(dma_channel_enum dma1_ch, uint32 source_addr, uint32 destination_
     dmaInit.DMA_MemoryDataSize     = datasize;
     dmaInit.DMA_Mode               = DMA_Mode_Normal;
     dmaInit.DMA_Priority           = priority;
-    dmaInit.DMA_M2M                = DMA_M2M_Enable;
+    dmaInit.DMA_M2M                = DMA_M2M_Disable;
     DMA_Init(ch, &dmaInit);
 
     /* 4. 启动传输关闭 */
@@ -94,12 +95,7 @@ void dma1_enable(dma_channel_enum dma1_ch)
 {
     if (dma1_ch > dma1_CH7) return;          /* 越界保护 */
 
-    static DMA_Channel_TypeDef* const tbl[] = {
-        DMA1_Channel1, DMA1_Channel2, DMA1_Channel3,
-        DMA1_Channel4, DMA1_Channel5, DMA1_Channel6, DMA1_Channel7
-    };
-
-    DMA_Cmd(tbl[dma1_ch], ENABLE);           /* 置 EN 位，立即启动 */
+    DMA_Cmd(DMA1_ChannelTable[dma1_ch], ENABLE);           /* 置 EN 位，立即启动 */
 }
 //-------------------------------------------------------------------------------------------------------------------
 // 函数简介      启动DMA1数据转运
@@ -112,12 +108,7 @@ void dma1_enable(dma_channel_enum dma1_ch)
 void dma1_transfer(dma_channel_enum dma1_ch, uint16_t dma_count)
 {
     if (dma1_ch > dma1_CH7) return;
-
-    static DMA_Channel_TypeDef* const tbl[] = {
-        DMA1_Channel1, DMA1_Channel2, DMA1_Channel3,
-        DMA1_Channel4, DMA1_Channel5, DMA1_Channel6, DMA1_Channel7
-    };
-    DMA_Channel_TypeDef* ch = tbl[dma1_ch];
+    DMA_Channel_TypeDef* ch = DMA1_ChannelTable[dma1_ch];
 
     /* 1. 关闭通道 */
     DMA_Cmd(ch, DISABLE);
@@ -129,3 +120,36 @@ void dma1_transfer(dma_channel_enum dma1_ch, uint16_t dma_count)
     /* 3. 启动新一轮传输 */
     DMA_Cmd(ch, ENABLE);
 }
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介      设置DMA传输长度并启动
+// 参数说明      ch            			 选择DMA1通道
+// 参数说明      len           			 设置长度
+// 返回参数      void
+// 使用示例      dma1_transfer(dma1_CH2, 128);   /* 再转运 128 个 word */
+// 备注信息
+//-------------------------------------------------------------------------------------------------------------------
+void dma_start(DMA_Channel_TypeDef* ch, uint16 len)
+{
+    /* 确保通道关闭 */
+    DMA_Cmd(ch, DISABLE);
+    while(ch->CCR & 1);  /* 等待EN位清零 */
+    
+    /* 只设置长度 */
+    ch->CNDTR = len;
+    
+    /* 启动 */
+    DMA_Cmd(ch, ENABLE);
+}
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介      等待DMA完成
+// 参数说明      ch            			 选择DMA1通道
+// 返回参数      void
+// 使用示例      dma1_transfer(dma1_CH2, 128);   /* 再转运 128 个 word */
+// 备注信息
+//-------------------------------------------------------------------------------------------------------------------
+void dma_wait_done(DMA_Channel_TypeDef* ch)
+{
+    while(ch->CNDTR);
+}
+

@@ -35,11 +35,11 @@ void EXTI15_10_IRQHandler(void)
 /* -------------------- TIM2 中断服务函数 -------------------- */
 void TIM2_IRQHandler(void)
 {
-//	if (TIM_GetITStatus(TIM2, TIM_IT_Update) == SET)
-//	{
-//		
-//		TIM_ClearITPendingBit(TIM2, TIM_IT_Update);
-//	}
+	if (TIM_GetITStatus(TIM2, TIM_IT_Update) == SET)
+	{
+		
+		TIM_ClearITPendingBit(TIM2, TIM_IT_Update);
+	}
 }
 
 

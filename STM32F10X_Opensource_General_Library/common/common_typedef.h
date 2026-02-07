@@ -197,13 +197,13 @@ typedef enum        // 枚举ADC通道
 typedef enum    // 枚举DMA通道
 {
     // DMA1可选通道
-    dma1_CH1,//ADC
-   	dma1_CH2,//USART3 TX
-    dma1_CH3,
-    dma1_CH4,//USART1 TX
-    dma1_CH5,
-    dma1_CH6,
-    dma1_CH7,//USART2 TX
+    dma1_CH1,//ADC1
+   	dma1_CH2,//USART3-TX / SPI1-RX
+    dma1_CH3,//USART3-RX / SPI1-TX
+    dma1_CH4,//USART1-TX / IIC2-TX / SPI2-RX
+    dma1_CH5,//USART1-RX / IIC2-RX / SPI2-TX
+    dma1_CH6,//USART2-RX / IIC1-TX
+    dma1_CH7,//USART2-TX / IIC1-RX
 }dma_channel_enum;
 #define DMA_Byte           DMA_PeripheralDataSize_Byte       // ((uint32_t)0x00000000)
 #define DMA_HalfWord       DMA_PeripheralDataSize_HalfWord   // ((uint32_t)0x00000100)

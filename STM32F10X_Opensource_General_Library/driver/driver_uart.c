@@ -14,158 +14,204 @@
 * 2026-01-01        Lihua      first version
 ********************************************************************************************************************/
 #include "driver_uart.h"
-/* =========================  用户可改参数  ========================= */
-#define UART_RX_DMA_BUF_SIZE   256        /* 接收 DMA 环形缓冲区大小 */
-#define UART_TX_DMA_BUF_SIZE   256        /* 发送 DMA 缓冲区大小     */
-/* ================================================================= */
-/* 每路 UART 私有硬件信息 */
+
+/* 串口句柄 + 循环缓冲区定义 */
 typedef struct
 {
-    USART_TypeDef       *uart;                              /* 串口寄存器基址           */
-    DMA_Channel_TypeDef *rx_dma_ch;                         /* 接收 DMA 通道            */
-    DMA_Channel_TypeDef *tx_dma_ch;                         /* 发送 DMA 通道            */
-    uint8               rx_dma_buf[UART_RX_DMA_BUF_SIZE];   /* 接收原始 DMA 缓冲区      */
-    fifo_struct         rx_fifo;                            /* 接收数据 FIFO            */
-    uint8               tx_dma_buf[UART_TX_DMA_BUF_SIZE];   /* 发送原始 DMA 缓冲区      */
-    fifo_struct         tx_fifo;                            /* 发送数据 FIFO            */
-    uint8               tx_dma_running;                     /* 发送 DMA 忙标志          */
-}uart_hw_t;
-/* 硬件映射表 */
-static uart_hw_t uart_hw[3] =
+    USART_TypeDef       *uartx;
+    DMA_Channel_TypeDef *tx_dma_ch;
+    DMA_Channel_TypeDef *rx_dma_ch;
+    uint8               rx_buf[UART_RX_BUF_SIZE];
+    volatile uint16     rx_head;
+    volatile uint16     rx_tail;
+}uart_handle_t;
+
+/* 静态句柄 */
+static uart_handle_t g_uart[3] =
 {
-    [UART_1] = { .uart = USART1, .rx_dma_ch = DMA1_Channel5, .tx_dma_ch = DMA1_Channel4 },
-    [UART_2] = { .uart = USART2, .rx_dma_ch = DMA1_Channel6, .tx_dma_ch = DMA1_Channel7 },
-    [UART_3] = { .uart = USART3, .rx_dma_ch = DMA1_Channel3, .tx_dma_ch = DMA1_Channel2 },
+    {USART1, DMA1_Channel4, DMA1_Channel5},   /* UART1 */
+    {USART2, DMA1_Channel7, DMA1_Channel6},   /* UART2 */
+    {USART3, DMA1_Channel2, DMA1_Channel3},   /* UART3 */
 };
 
-/* ----------------------------------------------------------
- * @brief  NVIC 配置（内部调用）
- * ---------------------------------------------------------- */
-static void nvic_cfg(IRQn_Type irq, uint8 pre)
+/* 取串口号索引 */
+static inline uint8 uart_idx(uart_index_enum uartn)
 {
-    NVIC_InitTypeDef nvic_structure =
-    {
-        .NVIC_IRQChannel                   = irq,
-        .NVIC_IRQChannelPreemptionPriority = pre,//抢占优先级
-        .NVIC_IRQChannelSubPriority        = 0,//响应优先级
-        .NVIC_IRQChannelCmd                = ENABLE
-    };
-    NVIC_Init(&nvic_structure);
+    return (uint8)uartn;   /* UART_1=0, UART_2=1, UART_3=2 */
 }
 
-/* ----------------------------------------------------------
- * @brief  启动一次 DMA 发送（内部调用）
- * ---------------------------------------------------------- */
-static void uart_start_tx_dma(uart_index_enum uartn)
+// 获取USART对应的中断通道
+static inline uint8_t uart_get_irq_channel(USART_TypeDef *u)
 {
-    uart_hw_t *hw = &uart_hw[uartn];
-    uint32 len = fifo_used(&hw->tx_fifo);
-    if (!len) { hw->tx_dma_running = 0; return; }
-    if (len > UART_TX_DMA_BUF_SIZE) len = UART_TX_DMA_BUF_SIZE;
-
-    fifo_read_buffer(&hw->tx_fifo, hw->tx_dma_buf, &len, FIFO_READ_ONLY);
-
-    DMA_Cmd(hw->tx_dma_ch, DISABLE);
-    while (hw->tx_dma_ch->CCR & (1U << 0));          /* 等待 EN 位清零 */
-    DMA_SetCurrDataCounter(hw->tx_dma_ch, len);
-    DMA_Cmd(hw->tx_dma_ch, ENABLE);
-    USART_DMACmd(hw->uart, USART_DMAReq_Tx, ENABLE);
-    hw->tx_dma_running = 1;
+    if(u == USART1) return USART1_IRQn;
+    if(u == USART2) return USART2_IRQn;
+    return USART3_IRQn;
 }
 
-/* ----------------------------------------------------------
- * @brief  DMA 发送完成中断回调（用户可定制）
- * ---------------------------------------------------------- */
-void uart_tx_interrupt(uart_index_enum uartn, uint32 status)
+#if UART_TX_USE_DMA
+  /* TX DMA通道标志 */
+  static const uint32 g_dma_tx_tc_flag[3] = {
+      DMA1_FLAG_TC4,   /* UART1 TX - Channel 4 */
+      DMA1_FLAG_TC7,   /* UART2 TX - Channel 7 */
+      DMA1_FLAG_TC2    /* UART3 TX - Channel 2 */
+  };
+#endif
+
+#if UART_RX_USE_DMA
+  /* RX DMA通道中断标志 */
+  static const uint32 g_dma_rx_tc_flag[3] = {
+      DMA1_IT_TC5,   /* UART1 RX - Channel 5 */
+      DMA1_IT_TC6,   /* UART2 RX - Channel 6 */
+      DMA1_IT_TC3    /* UART3 RX - Channel 3 */
+  };
+
+// 获取DMA通道对应的中断通道
+static inline uint8_t uart_get_dma_irq_channel(uint8 idx)
 {
-    uart_hw_t *hw = &uart_hw[uartn];
-    hw->tx_dma_running = 0;
-    uart_start_tx_dma(uartn);
+    // DMA通道: UART1=CH5, UART2=CH6, UART3=CH3
+    const uint8_t dma_irq[] = {DMA1_Channel5_IRQn, DMA1_Channel6_IRQn, DMA1_Channel3_IRQn};
+    return dma_irq[idx];
 }
+
+#endif	
 //-------------------------------------------------------------------------------------------------------------------
-// 函数简介     串口单字节发送（阻塞）
-// 参数说明     uartn           串口号，可选UART_1、UART_2、UART_3
-// 参数说明     dat             待发送字节
-// 返回参数     void
-// 使用示例     uart_write_byte(UART_1, 0x55);
-// 备注信息     内部等待TXE置位，确保发送完成
+// 函数简介       串口发送写入
+// 参数说明       uart_n          串口模块号 
+// 参数说明       dat             需要发送的字节
+// 返回参数       void
+// 使用示例       uart_write_byte(UART_1, 0xA5);                    // 往串口1的发送缓冲区写入0xA5，写入后仍然会发送数据，但是会减少CPU在串口的执行时
+// 备注信息
 //-------------------------------------------------------------------------------------------------------------------
-void uart_write_byte(uart_index_enum uartn, uint8 dat)
+void uart_write_byte(uart_index_enum uartn, const uint8 dat)
 {
-    USART_TypeDef *u = uart_hw[uartn].uart;
-    while (!(u->SR & USART_SR_TXE));
-    u->DR = dat;
+#if UART_TX_USE_DMA 
+    uint8 tmp = dat;
+    uart_write_buffer(uartn, &tmp, 1);
+#else
+    USART_TypeDef *u = g_uart[uart_idx(uartn)].uartx;
+    while(USART_GetFlagStatus(u, USART_FLAG_TXE) == RESET);
+    USART_SendData(u, dat);	
+#endif	
 }
 
 //-------------------------------------------------------------------------------------------------------------------
-// 函数简介     串口缓冲区发送（阻塞）
-// 参数说明     uartn           串口号，可选UART_1、UART_2、UART_3
-// 参数说明     buff            数据缓冲区首地址
-// 参数说明     len             待发送长度
-// 返回参数     void
-// 使用示例     uart_write_buffer(UART_1, buf, 64);
-// 备注信息     逐字节调用uart_write_byte，适合少量数据
+// 函数简介       串口发送数组
+// 参数说明       uart_n          串口模块号 参照 zf_driver_uart.h 内 uart_index_enum 枚举体定义
+// 参数说明       *buff           要发送的数组地址
+// 参数说明       len             发送长度
+// 返回参数       void
+// 使用示例       uart_write_buffer(UART_1, &a[0], 5);
+// 备注信息
 //-------------------------------------------------------------------------------------------------------------------
 void uart_write_buffer(uart_index_enum uartn, const uint8 *buff, uint32 len)
-{ while (len--) uart_write_byte(uartn, *buff++); }
-
-//-------------------------------------------------------------------------------------------------------------------
-// 函数简介     串口字符串发送（阻塞）
-// 参数说明     uartn           串口号，可选UART_1、UART_2、UART_3
-// 参数说明     str             以'\0'结尾的字符串
-// 返回参数     void
-// 使用示例     uart_write_string(UART_1, "hello\r\n");
-// 备注信息     内部调用uart_write_buffer
-//-------------------------------------------------------------------------------------------------------------------
-void uart_write_string(uart_index_enum uartn, const char *str)
-{ uart_write_buffer(uartn, (uint8 *)str, strlen(str)); }
-
-//-------------------------------------------------------------------------------------------------------------------
-// 函数简介     串口单字节接收（阻塞）
-// 参数说明     uartn           串口号，可选UART_1、UART_2、UART_3
-// 返回参数     uint8           收到的字节
-// 使用示例     uint8 dat = uart_read_byte(UART_1);
-// 备注信息     内部等待直到收到数据
-//-------------------------------------------------------------------------------------------------------------------
-uint8 uart_read_byte(uart_index_enum uartn)
 {
-    uint8 d;
-    while (!uart_query_byte(uartn, &d));
-    return d;
+	  if(len == 0 || buff == NULL) return;
+#if UART_TX_USE_DMA 
+    uint8 idx = uart_idx(uartn);
+    uart_handle_t *hu = &g_uart[idx];
+
+    while(hu->tx_dma_ch->CCR & DMA_CCR1_EN);          /* 等上一次完成 */
+    hu->tx_dma_ch->CMAR  = (uint32)buff;              /* 源地址 */
+    hu->tx_dma_ch->CNDTR = len;                       /* 长度 */
+		DMA_ClearFlag(g_dma_tx_tc_flag[idx]);             /* 清 TC标志 - 使用查表方式 */       /* 清 TC */
+    DMA_Cmd(hu->tx_dma_ch, ENABLE);                   /* 启动 */
+
+    while(DMA_GetFlagStatus(g_dma_tx_tc_flag[idx]) == RESET); /* 阻塞等待完成 */
+	  DMA_Cmd(hu->tx_dma_ch, DISABLE);
+#else
+    while(len--) uart_write_byte(uartn, *buff++);	
+	
+#endif	
+	
 }
 
 //-------------------------------------------------------------------------------------------------------------------
-// 函数简介     串口非阻塞查询单字节
-// 参数说明     uartn           串口号，可选UART_1、UART_2、UART_3
-// 参数说明     dat             用于保存接收到的字节
-// 返回参数     uint8           1表示成功，0表示无数据
-// 使用示例     uint8 dat; if(uart_query_byte(UART_1, &dat)) { ... }
-// 备注信息     不阻塞，立即返回
+// 函数简介       串口发送字符串
+// 参数说明       uart_n          串口模块号 
+// 参数说明       *str            要发送的字符串地址
+// 返回参数       void
+// 使用示例       uart_write_string(UART_1, "Lihua");
+// 备注信息
+//-------------------------------------------------------------------------------------------------------------------
+void uart_write_string(uart_index_enum uartn, const char *str)
+{
+    uart_write_buffer(uartn, (uint8*)str, strlen(str));
+}
+
+/*============================ 接收部分 ============================*/
+/* 把收到的 1 字节压入 FIFO */
+static void uart_rx_push(uart_index_enum uartn, uint8 dat)
+{
+    uint8 idx = uart_idx(uartn);
+    uart_handle_t *hu = &g_uart[idx];
+    uint16 next = (hu->rx_head + 1) % UART_RX_BUF_SIZE;
+    if(next != hu->rx_tail)           /* 没满 */
+    {
+        hu->rx_buf[hu->rx_head] = dat;
+        hu->rx_head = next;
+    }
+}
+
+//-------------------------------------------------------------------------------------------------------------------
+// 函数简介       读取串口接收的数据（查询接收）
+// 参数说明       uart_n          串口模块号 参照 zf_driver_uart.h 内 uart_index_enum 枚举体定义
+// 参数说明       *dat            接收数据的地址
+// 返回参数       uint8           1：接收成功   0：未接收到数据
+// 使用示例       uint8 dat; uart_query_byte(UART_1, &dat);       // 接收 UART_1 数据  存在在 dat 变量里
+// 备注信息
 //-------------------------------------------------------------------------------------------------------------------
 uint8 uart_query_byte(uart_index_enum uartn, uint8 *dat)
 {
-    return fifo_read_element(&uart_hw[uartn].rx_fifo, dat, FIFO_READ_AND_CLEAN) == FIFO_SUCCESS;
+    uint8 idx = uart_idx(uartn);
+    uart_handle_t *hu = &g_uart[idx];
+    if(hu->rx_head == hu->rx_tail) return 0;   /* 空 */
+    *dat = hu->rx_buf[hu->rx_tail];
+    hu->rx_tail = (hu->rx_tail + 1) % UART_RX_BUF_SIZE;
+    return 1;
 }
 
 //-------------------------------------------------------------------------------------------------------------------
-// 函数简介     串口初始化（FIFO+DMA+中断）
-// 参数说明     uartn           串口号，可选UART_1、UART_2、UART_3
-// 参数说明     baud            波特率，常用115200、9600等
-// 参数说明     tx_pin          发送引脚，参考uart_tx_pin_enum枚举
-// 参数说明     rx_pin          接收引脚，参考uart_rx_pin_enum枚举
-// 返回参数     void
-// 使用示例     uart_init(UART_1, 115200, UART1_TX_PA9, UART1_RX_PA10);
-// 备注信息     内部已完成NVIC、DMA、GPIO、USART配置
+// 函数简介       读取串口接收的数据（whlie等待）
+// 参数说明       uart_n          串口模块号 参照 zf_driver_uart.h 内 uart_index_enum 枚举体定义
+// 参数说明       *dat            接收数据的地址
+// 返回参数       uint8           接收的数据
+// 使用示例       uint8 dat = uart_read_byte(UART_1);             // 接收 UART_1 数据  存在在 dat 变量里
+// 备注信息
 //-------------------------------------------------------------------------------------------------------------------
-void uart_init(uart_index_enum uartn, uint32 baud, uart_tx_pin_enum tx_pin, uart_rx_pin_enum rx_pin)
+uint8 uart_read_byte(uart_index_enum uartn)
 {
-    uart_hw_t *hw = &uart_hw[uartn];
-    USART_InitTypeDef usart_init_struct;
-    GPIO_InitTypeDef  gpio_init_struct;
-    uint32_t tx_port_clk;
-    GPIO_TypeDef *tx_port, *rx_port;
-    uint16_t tx_pin_src, rx_pin_src;
+    uint8 dat;
+    while(!uart_query_byte(uartn, &dat));
+    return dat;
+}
 
+//-------------------------------------------------------------------------------------------------------------------
+//  函数简介      串口初始化
+//  参数说明      uartn           串口模块号(UART_0,UART_1,UART_2,UART_3)
+//  参数说明      baud            串口波特率
+//  参数说明      tx_pin          串口发送引脚
+//  参数说明      rx_pin          串口接收引脚
+//  返回参数      uint32          实际波特率
+//  使用示例      uart_init(UART_0,115200,UART0_TX_P14_0,UART0_RX_P14_1);       // 初始化串口0 波特率115200 发送引脚使用P14_0 接收引脚使用P14_1
+//  备注信息
+//-------------------------------------------------------------------------------------------------------------------
+void uart_init(uart_index_enum uartn, uint32 baud,
+               uart_tx_pin_enum tx_pin, uart_rx_pin_enum rx_pin)
+{
+    uint8 idx = uart_idx(uartn);
+    uart_handle_t *hu = &g_uart[idx];
+    USART_TypeDef *u = hu->uartx;
+
+    GPIO_InitTypeDef  gpio_init_struct;
+    GPIO_TypeDef *tx_port, *rx_port;
+    uint16 tx_pin_src, rx_pin_src;
+
+	  uint8 preempt_pri;
+
+#if UART_RX_USE_DMA
+    uint8_t dma_preempt_pri;  // 仅在DMA模式下定义
+#endif
+	
     /* 1. 根据 uartn 取 TX/RX 端口及复用源 */
     if (uartn == UART_1)
     {
@@ -173,27 +219,35 @@ void uart_init(uart_index_enum uartn, uint32 baud, uart_tx_pin_enum tx_pin, uart
         rx_port = (rx_pin == UART1_RX_PA10) ? GPIOA : GPIOB;
         tx_pin_src = (tx_pin == UART1_TX_PA9)  ? GPIO_PinSource9  : GPIO_PinSource6;
         rx_pin_src = (rx_pin == UART1_RX_PA10) ? GPIO_PinSource10 : GPIO_PinSource7;
-        tx_port_clk = RCC_APB2Periph_GPIOA | RCC_APB2Periph_GPIOB;
+			  preempt_pri = UART1_NVIC_PREEMPT_PRIORITY;
+#if UART_RX_USE_DMA			
+        dma_preempt_pri = UART1_DMA_NVIC_PREEMPT_PRIORITY;
+#endif			
     }
     else if (uartn == UART_2)
     {
         tx_port = GPIOA; rx_port = GPIOA;
         tx_pin_src = GPIO_PinSource2; rx_pin_src = GPIO_PinSource3;
-        tx_port_clk = RCC_APB2Periph_GPIOA;
+        preempt_pri = UART2_NVIC_PREEMPT_PRIORITY;
+#if UART_RX_USE_DMA				
+        dma_preempt_pri = UART2_DMA_NVIC_PREEMPT_PRIORITY;
+#endif				
     }
     else /* UART_3 */
     {
         tx_port = GPIOB; rx_port = GPIOB;
         tx_pin_src = GPIO_PinSource10; rx_pin_src = GPIO_PinSource11;
-        tx_port_clk = RCC_APB2Periph_GPIOB;
+			  preempt_pri = UART3_NVIC_PREEMPT_PRIORITY;
+#if UART_RX_USE_DMA						
+        dma_preempt_pri = UART3_DMA_NVIC_PREEMPT_PRIORITY;
+#endif			
     }
 
     /* 2. 开时钟 */
-    RCC_APB2PeriphClockCmd(tx_port_clk | RCC_APB2Periph_AFIO, ENABLE);
+    RCC_APB2PeriphClockCmd(RCC_APB2Periph_AFIO, ENABLE);
     if (uartn == UART_1) RCC_APB2PeriphClockCmd(RCC_APB2Periph_USART1, ENABLE);
     else if (uartn == UART_2) RCC_APB1PeriphClockCmd(RCC_APB1Periph_USART2, ENABLE);
     else                      RCC_APB1PeriphClockCmd(RCC_APB1Periph_USART3, ENABLE);
-    RCC_AHBPeriphClockCmd(RCC_AHBPeriph_DMA1, ENABLE);
 
     /* 3. GPIO 配置 */
     if (uartn == UART_1 && tx_port == GPIOB)
@@ -207,186 +261,147 @@ void uart_init(uart_index_enum uartn, uint32 baud, uart_tx_pin_enum tx_pin, uart
     gpio_init_struct.GPIO_Mode  = GPIO_Mode_IN_FLOATING;
     GPIO_Init(rx_port, &gpio_init_struct);
 
-    /* 4. USART 配置 */
-    USART_StructInit(&usart_init_struct);
-    usart_init_struct.USART_BaudRate            = baud;
-    usart_init_struct.USART_WordLength        = USART_WordLength_8b;
-    usart_init_struct.USART_StopBits          = USART_StopBits_1;
-    usart_init_struct.USART_Parity            = USART_Parity_No;
-    usart_init_struct.USART_Mode              = USART_Mode_Rx | USART_Mode_Tx;
-    usart_init_struct.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
-    USART_Init(hw->uart, &usart_init_struct);
-		
-    /* 5. NVIC 配置：串口接收 + DMA 发送中断 抢占优先级写死，响应优先级 0 */
-		NVIC_PriorityGroupConfig(NVIC_PriorityGroup_2);
-    if (uartn == UART_1)
-    {
-        nvic_cfg(USART1_IRQn, 1); // 串口接收抢占=1
-        nvic_cfg(DMA1_Channel4_IRQn, 1);// DMA-TX 抢占=1
-    }
-    else if (uartn == UART_2)
-    {
-        nvic_cfg(USART2_IRQn, 2);
-        nvic_cfg(DMA1_Channel7_IRQn, 2);
-    }
-    else
-    {
-        nvic_cfg(USART3_IRQn, 3);
-        nvic_cfg(DMA1_Channel2_IRQn, 3);
-    }
+    /* 3. 配 USART 基本参数 */
+    USART_InitTypeDef us;
+    USART_StructInit(&us);
+    us.USART_BaudRate            = baud;
+    us.USART_WordLength          = USART_WordLength_8b;
+    us.USART_StopBits            = USART_StopBits_1;
+    us.USART_Parity              = USART_Parity_No;
+    us.USART_Mode                = USART_Mode_Rx | USART_Mode_Tx;
+    us.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
+    USART_Init(u, &us);
 
-    /* 6. FIFO 初始化 */
-    fifo_init(&hw->rx_fifo, FIFO_DATA_8BIT, hw->rx_dma_buf, UART_RX_DMA_BUF_SIZE);
-    fifo_init(&hw->tx_fifo, FIFO_DATA_8BIT, hw->tx_dma_buf, UART_TX_DMA_BUF_SIZE);
-    hw->tx_dma_running = 0;
+		/* 4. 配 NVIC */
+    NVIC_PriorityGroupConfig(NVIC_PriorityGroup_4);
 
-    /* 7. 配置 DMA 循环模式用于接收 */
-    DMA_DeInit(hw->rx_dma_ch);
+    // USART NVIC 配置
+    NVIC_InitTypeDef nv;
+    nv.NVIC_IRQChannel = uart_get_irq_channel(u);
+    nv.NVIC_IRQChannelPreemptionPriority = preempt_pri;
+    nv.NVIC_IRQChannelSubPriority = 0;
+    nv.NVIC_IRQChannelCmd = ENABLE;
+    NVIC_Init(&nv);
+
+#if UART_RX_USE_DMA
+    /* 5. RX-DMA 配置：循环搬运到 rx_buf，半完成/完成中断里推 FIFO */
+    RCC_AHBPeriphClockCmd(RCC_AHBPeriph_DMA1, ENABLE);
+    DMA_DeInit(hu->rx_dma_ch);
     DMA_InitTypeDef dma;
-    DMA_StructInit(&dma);
-    dma.DMA_PeripheralBaseAddr = (uint32)&hw->uart->DR;
-    dma.DMA_MemoryBaseAddr     = (uint32)hw->rx_dma_buf;
+    dma.DMA_PeripheralBaseAddr = (uint32)&u->DR;
+    dma.DMA_MemoryBaseAddr     = (uint32)hu->rx_buf;
     dma.DMA_DIR                = DMA_DIR_PeripheralSRC;
-    dma.DMA_BufferSize         = UART_RX_DMA_BUF_SIZE;
+    dma.DMA_BufferSize         = UART_RX_BUF_SIZE;
     dma.DMA_PeripheralInc      = DMA_PeripheralInc_Disable;
     dma.DMA_MemoryInc          = DMA_MemoryInc_Enable;
     dma.DMA_PeripheralDataSize = DMA_PeripheralDataSize_Byte;
     dma.DMA_MemoryDataSize     = DMA_MemoryDataSize_Byte;
     dma.DMA_Mode               = DMA_Mode_Circular;
-    dma.DMA_Priority           = DMA_Priority_VeryHigh;
+    dma.DMA_Priority           = DMA_Priority_Medium;
     dma.DMA_M2M                = DMA_M2M_Disable;
-    DMA_Init(hw->rx_dma_ch, &dma);
-    DMA_Cmd(hw->rx_dma_ch, ENABLE);
-    USART_DMACmd(hw->uart, USART_DMAReq_Rx, ENABLE);
+    DMA_Init(hu->rx_dma_ch, &dma);
 
-    /* 8. 使能发送 DMA 传输完成中断 */
-    DMA_ITConfig(hw->tx_dma_ch, DMA_IT_TC, ENABLE);
+    USART_DMACmd(u, USART_DMAReq_Rx, ENABLE);
+    DMA_Cmd(hu->rx_dma_ch, ENABLE);
 
-    /* 9. 使能串口 */
-    USART_Cmd(hw->uart, ENABLE);
+    /* 开 DMA 中断，半/全完成都把“新数据”推 FIFO */
+    DMA_ITConfig(hu->rx_dma_ch, DMA_IT_TC | DMA_IT_HT, ENABLE);
+      /* 根据DMA通道配置中断向量 */
+		nv.NVIC_IRQChannel = uart_get_dma_irq_channel(idx);
+    nv.NVIC_IRQChannelPreemptionPriority = dma_preempt_pri;  // DMA优先级高于USART
+    nv.NVIC_IRQChannelSubPriority = 0;
+    NVIC_Init(&nv);
+#else
+    /* 普通中断接收 */
+    USART_ITConfig(u, USART_IT_RXNE, ENABLE);
+#endif
+
+#if UART_TX_USE_DMA
+      /* 7. TX-DMA 配置准备（只配置，不启动） */
+      RCC_AHBPeriphClockCmd(RCC_AHBPeriph_DMA1, ENABLE);
+      DMA_DeInit(hu->tx_dma_ch);
+      DMA_InitTypeDef tx_dma;
+      tx_dma.DMA_PeripheralBaseAddr = (uint32)&u->DR;
+      tx_dma.DMA_MemoryBaseAddr     = 0;  /* 发送时再设置 */
+      tx_dma.DMA_DIR                = DMA_DIR_PeripheralDST;
+      tx_dma.DMA_BufferSize         = 0;  /* 发送时再设置 */
+      tx_dma.DMA_PeripheralInc      = DMA_PeripheralInc_Disable;
+      tx_dma.DMA_MemoryInc          = DMA_MemoryInc_Enable;
+      tx_dma.DMA_PeripheralDataSize = DMA_PeripheralDataSize_Byte;
+      tx_dma.DMA_MemoryDataSize     = DMA_MemoryDataSize_Byte;
+      tx_dma.DMA_Mode               = DMA_Mode_Normal;  /* 发送用正常模式 */
+      tx_dma.DMA_Priority           = DMA_Priority_Medium;
+      tx_dma.DMA_M2M                = DMA_M2M_Disable;
+      DMA_Init(hu->tx_dma_ch, &tx_dma);
+      
+      USART_DMACmd(u, USART_DMAReq_Tx, ENABLE);
+      /* TX DMA不开启中断，使用查询方式等待完成 */
+#endif
+
+    USART_Cmd(u, ENABLE);
 }
 
-//-------------------------------------------------------------------------------------------------------------------
-// 函数简介     DMA方式发送数据包（非阻塞）
-// 参数说明     uartn           串口号，可选UART_1、UART_2、UART_3
-// 参数说明     buff            待发送数据缓冲区
-// 参数说明     len             待发送长度
-// 返回参数     void
-// 使用示例     uart_write_buffer_dma(UART_1, buf, 64);
-// 备注信息     数据先写入FIFO，再由DMA后台发送
-//-------------------------------------------------------------------------------------------------------------------
-fifo_state_enum uart_write_buffer_dma(uart_index_enum uartn, const uint8 *buff, uint32 len)
-{
-    uart_hw_t *hw = &uart_hw[uartn];
-    if(!len) return FIFO_SUCCESS;
-    fifo_state_enum ret = fifo_write_buffer(&hw->tx_fifo, (void *)buff, len);
-    if(ret == FIFO_SUCCESS && !hw->tx_dma_running)
-        uart_start_tx_dma(uartn);
-    return ret;
-}
-
-//-------------------------------------------------------------------------------------------------------------------
-// 函数简介     发送固定长度ASCII数字，前面补0
-// 参数说明     uartn           串口号，可选UART_1、UART_2、UART_3
-// 参数说明     number          待发送数字
-// 参数说明     length          固定长度，不足前面补0
-// 返回参数     void
-// 使用示例     uart_send_number(UART_1, 123, 5); //输出"00123"
-// 备注信息     最大支持10位
-//-------------------------------------------------------------------------------------------------------------------
-void uart_send_number(uart_index_enum uartn, uint32 number, uint8 length)
-{
-    char buf[11];
-    uint8_t i = length > 10 ? 10 : length;
-    buf[i] = '\0';
-    while (i--)
-    {
-        buf[i] = (number % 10) + '0';
-        number /= 10;
-    }
-    uart_write_buffer_dma(uartn, (uint8 *)buf, length);
-}
-
-
-
-
-
-/* ========================= 串口中断服务函数 ========================= */
-
-/**
- * @brief  USART1 接收中断，将数据压入 FIFO
- */
-void USART1_IRQHandler(void)
-{
-    if (USART_GetITStatus(USART1, USART_IT_RXNE) != RESET)
-    {
-        uint8_t dat = USART_ReceiveData(USART1);
-        fifo_write_element(&uart_hw[UART_1].rx_fifo, dat);
-    }
-		
+/*-------------------- 中断服务 --------------------*/
+  
+#if !UART_RX_USE_DMA
+  /* 非DMA接收模式：使用串口中断接收 */
+  static void uart_rx_irq_handler(uart_index_enum uartn)
+  {
+      USART_TypeDef *u = g_uart[uart_idx(uartn)].uartx;
+      if(USART_GetITStatus(u, USART_IT_RXNE) != RESET)
+      {
+          uint8 dat = USART_ReceiveData(u);
+          uart_rx_push(uartn, dat);
+      }
+  }
+  void USART1_IRQHandler(void){
+	uart_rx_irq_handler(UART_1); 
 #if DEBUG_UART_USE_INTERRUPT                        // 如果开启 debug 串口中断
         debug_interrupr_handler();                  // 调用 debug 串口接收处理函数 数据会被 debug 环形缓冲区读取
-#endif                                              // 如果修改了 DEBUG_UART_INDEX 那这段代码需要放到对应的串口中断去
+#endif                                              // 如果修改了 DEBUG_UART_INDEX 那这段代码需要放到对应的串口中断去		
+	}
+  void USART2_IRQHandler(void){ uart_rx_irq_handler(UART_2); }
+  void USART3_IRQHandler(void){ uart_rx_irq_handler(UART_3); }
+#else
+  /* DMA接收模式：串口中断只处理错误 */
+  void USART1_IRQHandler(void)
+  {
+      if(USART_GetITStatus(USART1, USART_IT_RXNE) != RESET)
+          USART_ReceiveData(USART1); /* 清除中断标志 */
+  }
+  void USART2_IRQHandler(void)
+  {
+      if(USART_GetITStatus(USART2, USART_IT_RXNE) != RESET)
+          USART_ReceiveData(USART2); /* 清除中断标志 */
+  }
+  void USART3_IRQHandler(void)
+  {
+      if(USART_GetITStatus(USART3, USART_IT_RXNE) != RESET)
+          USART_ReceiveData(USART3); /* 清除中断标志 */
+  }
+#endif
 
-}
+  /*============================ DMA 中断服务（仅 RX-DMA 模式用到） ============================*/
+#if UART_RX_USE_DMA
+  static void uart_rx_dma_handler(uint8 idx)
+  {
+      uart_handle_t *hu = &g_uart[idx];
+      uint16 tail = hu->rx_dma_ch->CNDTR;        /* 剩余未读数 */
+      uint16 pos  = UART_RX_BUF_SIZE - tail;     /* 当前 DMA 写指针 */
+      uint16 old  = (hu->rx_head) % UART_RX_BUF_SIZE;
 
-/**
- * @brief  USART2 接收中断
- */
-void USART2_IRQHandler(void)
-{
-    if (USART_GetITStatus(USART2, USART_IT_RXNE) != RESET)
-    {
-        uint8_t dat = USART_ReceiveData(USART2);
-        fifo_write_element(&uart_hw[UART_2].rx_fifo, dat);
-    }
-}
+      /* 把 [old, pos) 区间的新数据推入用户 FIFO */
+      while(old != pos)
+      {
+          uart_rx_push((uart_index_enum)idx, hu->rx_buf[old]);
+          old = (old + 1) % UART_RX_BUF_SIZE;
+      }
+      /* 清中断标志 - 使用查表方式 */
+      DMA_ClearITPendingBit(g_dma_rx_tc_flag[idx]);
+  }
 
-/**
- * @brief  USART3 接收中断
- */
-void USART3_IRQHandler(void)
-{
-    if (USART_GetITStatus(USART3, USART_IT_RXNE) != RESET)
-    {
-        uint8_t dat = USART_ReceiveData(USART3);
-        fifo_write_element(&uart_hw[UART_3].rx_fifo, dat);
-    }
-}
-
-/**
- * @brief  DMA1 通道 4 传输完成中断（USART1 TX）
- */
-void DMA1_Channel4_IRQHandler(void)
-{
-    if (DMA_GetITStatus(DMA1_IT_TC4))
-    {
-        DMA_ClearITPendingBit(DMA1_IT_TC4);
-        uart_tx_interrupt(UART_1, 0);
-    }
-}
-
-/**
- * @brief  DMA1 通道 7 传输完成中断（USART2 TX）
- */
-void DMA1_Channel7_IRQHandler(void)
-{
-    if (DMA_GetITStatus(DMA1_IT_TC7))
-    {
-        DMA_ClearITPendingBit(DMA1_IT_TC7);
-        uart_tx_interrupt(UART_2, 0);
-    }
-}
-
-/**
- * @brief  DMA1 通道 2 传输完成中断（USART3 TX）
- */
-void DMA1_Channel2_IRQHandler(void)
-{
-    if (DMA_GetITStatus(DMA1_IT_TC2))
-    {
-        DMA_ClearITPendingBit(DMA1_IT_TC2);
-        uart_tx_interrupt(UART_3, 0);
-    }
-}
-
+  void DMA1_Channel5_IRQHandler(void){ uart_rx_dma_handler(0); }  /* UART1 RX - Channel 5 */
+  void DMA1_Channel6_IRQHandler(void){ uart_rx_dma_handler(1); }  /* UART2 RX - Channel 6 */
+  void DMA1_Channel3_IRQHandler(void){ uart_rx_dma_handler(2); }  /* UART3 RX - Channel 3 */
+#endif
+	

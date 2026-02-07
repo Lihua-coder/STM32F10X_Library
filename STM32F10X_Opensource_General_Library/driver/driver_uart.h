@@ -14,11 +14,29 @@
 * 2026-01-01        Lihua      first version
 ********************************************************************************************************************/
 
-#ifndef __DRIVER_UART_H
-#define __DRIVER_UART_H
+#ifndef _driver_uart_h_
+#define _driver_uart_h_
+
 #include "common_headfile.h"
+// 1表示使用DMA驱动，0表示使用普通驱动
+// 当更改定义后，需要先编译并下载程序，单片机与模块需要断电重启才能正常通讯
+#define UART_TX_USE_DMA         (0)                                       // 默认使用 DMA 方式驱动	
+#define UART_RX_USE_DMA         (0)                                       // 默认使用 DMA 方式驱动	
 
 
+// USART 中断优先级（数值越小优先级越高，范围0-15）
+#define UART1_NVIC_PREEMPT_PRIORITY     (3)
+#define UART2_NVIC_PREEMPT_PRIORITY     (4)
+#define UART3_NVIC_PREEMPT_PRIORITY     (5)
+
+// DMA 中断优先级（必须高于对应USART，防止数据覆盖）
+#define UART1_DMA_NVIC_PREEMPT_PRIORITY (0)
+#define UART2_DMA_NVIC_PREEMPT_PRIORITY (1)
+#define UART3_DMA_NVIC_PREEMPT_PRIORITY (2)
+
+
+/* 内部循环缓冲区大小 */
+#define UART_RX_BUF_SIZE  256
 //====================================================串口 基础函数====================================================
 void    uart_write_byte                     (uart_index_enum uartn, const uint8 dat);
 void    uart_write_buffer                   (uart_index_enum uartn, const uint8 *buff, uint32 len);
@@ -27,16 +45,8 @@ void    uart_write_string                   (uart_index_enum uartn, const char *
 uint8   uart_read_byte                      (uart_index_enum uartn);
 uint8   uart_query_byte                     (uart_index_enum uartn, uint8 *dat);
 
-void    uart_tx_interrupt                   (uart_index_enum uartn, uint32 status);
-//void    uart_rx_interrupt                   (uart_index_enum uartn, uint32 status);
-
-void    uart_sbus_init                      (uart_index_enum uartn, uint32 baud, uart_tx_pin_enum tx_pin, uart_rx_pin_enum rx_pin);
 void    uart_init                           (uart_index_enum uartn, uint32 baud, uart_tx_pin_enum tx_pin, uart_rx_pin_enum rx_pin);
-//====================================================串口 基础函数====================================================
-void uart_send_number(uart_index_enum uartn, uint32 number, uint8 length);
-
-void uart_send_hexpacket(uart_index_enum uart_n,  uint8 hdr_len, const uint8 packethdr, const uint8 *array, uint32 len, const uint8 packetend, uint8 end_len);
-void uart_send_txtpacket(uart_index_enum uart_n,  uint8 hdr_len, const char *packethdr, const char *str, uint32 len, const char *packetend, uint8 end_len);
+//====================================================串口 基础函数=====================================================
 
 
 

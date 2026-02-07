@@ -22,9 +22,9 @@ int main(void)
 	 clock_gpio_init_all(); 
 	 debug_init();
 
-
     while (1)
     {
+
 
 			
     }
